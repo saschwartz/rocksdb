@@ -486,8 +486,8 @@ class BlockIter : public InternalIteratorBase<TValue> {
   inline bool BinarySeek(const Slice& target, uint32_t* index,
                          bool* is_index_key_result);
 
-  void FindKeyAfterBinarySeek(const Slice& target, uint32_t index,
-                              bool is_index_key_result);
+  void FindKeyAfterSeek(const Slice& target, uint32_t index,
+                        bool is_index_key_result);
 };
 
 class DataBlockIter final : public BlockIter<Slice> {

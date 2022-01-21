@@ -283,7 +283,7 @@ void DataBlockIter::SeekImpl(const Slice& target) {
   if (!ok) {
     return;
   }
-  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
+  FindKeyAfterSeek(seek_key, index, skip_linear_scan);
 }
 
 void MetaBlockIter::SeekImpl(const Slice& target) {
@@ -299,7 +299,7 @@ void MetaBlockIter::SeekImpl(const Slice& target) {
   if (!ok) {
     return;
   }
-  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
+  FindKeyAfterSeek(seek_key, index, skip_linear_scan);
 }
 
 // Optimized Seek for point lookup for an internal key `target`
@@ -455,7 +455,7 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
   if (!ok) {
     return;
   }
-  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
+  FindKeyAfterSeek(seek_key, index, skip_linear_scan);
 }
 
 void DataBlockIter::SeekForPrevImpl(const Slice& target) {
@@ -471,7 +471,7 @@ void DataBlockIter::SeekForPrevImpl(const Slice& target) {
   if (!ok) {
     return;
   }
-  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
+  FindKeyAfterSeek(seek_key, index, skip_linear_scan);
 
   if (!Valid()) {
     SeekToLastImpl();
@@ -495,7 +495,7 @@ void MetaBlockIter::SeekForPrevImpl(const Slice& target) {
   if (!ok) {
     return;
   }
-  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
+  FindKeyAfterSeek(seek_key, index, skip_linear_scan);
 
   if (!Valid()) {
     SeekToLastImpl();
@@ -698,10 +698,15 @@ void IndexBlockIter::DecodeCurrentValue(bool is_shared) {
   }
 }
 
+// After performing a seek to find some target, we have arrived at some index.
+// This index is guaranteed to be for a key <= target.
+//
+// We may now additionally have to do a further linear scan to find the first
+// key >= target (optionally skipping this scan if we have already reached this
+// point during the initial seek, according to skip_linear_scan).
 template <class TValue>
-void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
-                                               uint32_t index,
-                                               bool skip_linear_scan) {
+void BlockIter<TValue>::FindKeyAfterSeek(const Slice& target, uint32_t index,
+                                         bool skip_linear_scan) {
   // SeekToRestartPoint() only does the lookup in the restart block. We need
   // to follow it up with NextImpl() to position the iterator at the restart
   // key.
