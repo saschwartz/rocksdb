@@ -486,6 +486,10 @@ class BlockIter : public InternalIteratorBase<TValue> {
   inline bool BinarySeek(const Slice& target, uint32_t* index,
                          bool* is_index_key_result);
 
+  template <typename DecodeKeyFunc>
+  inline bool InterpolationSeek(const Slice& target, uint32_t* index,
+                                bool* is_index_key_result);
+
   void FindKeyAfterSeek(const Slice& target, uint32_t index,
                         bool is_index_key_result);
 };
