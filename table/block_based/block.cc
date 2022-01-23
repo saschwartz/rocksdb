@@ -280,7 +280,8 @@ void DataBlockIter::SeekImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan);
+  bool ok = Seek<DecodeKey>(SeekStrategy::Binary, seek_key, &index,
+                            &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -296,7 +297,8 @@ void MetaBlockIter::SeekImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan);
+  bool ok = Seek<DecodeKey>(SeekStrategy::Binary, seek_key, &index,
+                            &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -438,8 +440,10 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
 
   // TODO: this should come from a column family setting instead of an
   // environment variable.
-  bool interpolate =
-      (strcmp(std::getenv("ENABLE_INTERPOLATION_SEEK"), "1") == 0);
+  SeekStrategy strategy =
+      (strcmp(std::getenv("ENABLE_INTERPOLATION_SEEK"), "1") == 0)
+          ? SeekStrategy::Interpolation
+          : SeekStrategy::Binary;
 
   if (prefix_index_) {
     bool prefix_may_exist = true;
@@ -455,17 +459,9 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
     // search simply lands at the right place.
     skip_linear_scan = true;
   } else if (value_delta_encoded_) {
-    if (interpolate) {
-      ok = InterpolationSeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan);
-    } else {
-      ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan);
-    }
+    ok = Seek<DecodeKeyV4>(strategy, seek_key, &index, &skip_linear_scan);
   } else {
-    if (interpolate) {
-      ok = InterpolationSeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan);
-    } else {
-      ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan);
-    }
+    ok = Seek<DecodeKey>(strategy, seek_key, &index, &skip_linear_scan);
   }
 
   if (!ok) {
@@ -482,7 +478,8 @@ void DataBlockIter::SeekForPrevImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan);
+  bool ok = Seek<DecodeKey>(SeekStrategy::Binary, seek_key, &index,
+                            &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -506,7 +503,8 @@ void MetaBlockIter::SeekForPrevImpl(const Slice& target) {
   }
   uint32_t index = 0;
   bool skip_linear_scan = false;
-  bool ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan);
+  bool ok = Seek<DecodeKey>(SeekStrategy::Binary, seek_key, &index,
+                            &skip_linear_scan);
 
   if (!ok) {
     return;
@@ -757,18 +755,25 @@ void BlockIter<TValue>::FindKeyAfterSeek(const Slice& target, uint32_t index,
   }
 }
 
-// Binary searches in restart array to find the starting restart point for the
+// Searches in restart array to find the starting restart point for the
 // linear scan, and stores it in `*index`. Assumes restart array does not
-// contain duplicate keys. It is guaranteed that the restart key at `*index + 1`
-// is strictly greater than `target` or does not exist (this can be used to
-// elide a comparison when linear scan reaches all the way to the next restart
-// key). Furthermore, `*skip_linear_scan` is set to indicate whether the
-// `*index`th restart key is the final result so that key does not need to be
+// contain duplicate keys. This method calls into an underlying seek
+// implementation depending on the requested strategy. All underlying seek
+// implementations must fulfil the following conditions:
+//
+// (1) It is guaranteed that the restart key at `*index + 1` is strictly greater
+// than `target` or does not exist (this can be used to elide a comparison when
+// linear scan reaches all the way to the next restart.
+// key).
+//
+// (2) `*skip_linear_scan` is set to indicate whether the `*index`th restart key
+// is the final result so that key does not need to be
 // compared again later.
 template <class TValue>
 template <typename DecodeKeyFunc>
-bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
-                                   bool* skip_linear_scan) {
+bool BlockIter<TValue>::Seek(BlockIter<TValue>::SeekStrategy strategy,
+                             const Slice& target, uint32_t* index,
+                             bool* is_index_key_result) {
   if (restarts_ == 0) {
     // SST files dedicated to range tombstones are written with index blocks
     // that have no keys while also having `num_restarts_ == 1`. This would
@@ -779,6 +784,26 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
     return false;
   }
 
+  switch (strategy) {
+    case Binary:
+      return BinarySeek<DecodeKeyFunc>(target, index, is_index_key_result);
+    case Interpolation:
+      return InterpolationSeek<DecodeKeyFunc>(target, index,
+                                              is_index_key_result);
+    default:
+      return false;
+  }
+}
+
+// Uses a binary search algorithm to search for the restart array in which the
+// key `target` may reside.
+//
+// See `BlockIter<TValue>::Seek` for a description of the contract this method
+// must fulfil for the `*index` and `*skip_linear_scan` out parameters.
+template <class TValue>
+template <typename DecodeKeyFunc>
+bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
+                                   bool* skip_linear_scan) {
   *skip_linear_scan = false;
   // Loop invariants:
   // - Restart key at index `left` is less than or equal to the target key. The
@@ -826,19 +851,15 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
   return true;
 }
 
-// Uses interpolation search to look in the restart array to find the starting
-// restart point for the linear scan, and stores it in `*index`. Assumes restart
-// array does not contain duplicate keys. It is guaranteed that the restart key
-// at `*index + 1 is strictly greater than `target` or does not exist (this can
-// be used to elide a comparison when linear scan reaches all the way to the
-// next restart key). Furthermore, `*skip_linear_scan` is set to indicate
-// whether the `*index`th restart key is the final result so that key does not
-// need to be compared again later.
+// Uses a interpolations search algorithm to search for the restart array in
+// which the key `target` may reside.
+//
+// See `BlockIter<TValue>::Seek` for a description of the contract this method
+// must fulfil for the `*index` and `*skip_linear_scan` out parameters.
 template <class TValue>
 template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
                                           bool* skip_linear_scan) {
-  CorruptionError();
   return false;
 }
 

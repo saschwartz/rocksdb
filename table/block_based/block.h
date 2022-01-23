@@ -482,6 +482,19 @@ class BlockIter : public InternalIteratorBase<TValue> {
   void CorruptionError();
 
  protected:
+  enum SeekStrategy {
+    Binary,
+    Interpolation,
+  };
+
+  template <typename DecodeKeyFunc>
+  inline bool Seek(SeekStrategy strategy, const Slice& target, uint32_t* index,
+                   bool* is_index_key_result);
+
+  void FindKeyAfterSeek(const Slice& target, uint32_t index,
+                        bool is_index_key_result);
+
+ private:
   template <typename DecodeKeyFunc>
   inline bool BinarySeek(const Slice& target, uint32_t* index,
                          bool* is_index_key_result);
@@ -489,9 +502,6 @@ class BlockIter : public InternalIteratorBase<TValue> {
   template <typename DecodeKeyFunc>
   inline bool InterpolationSeek(const Slice& target, uint32_t* index,
                                 bool* is_index_key_result);
-
-  void FindKeyAfterSeek(const Slice& target, uint32_t index,
-                        bool is_index_key_result);
 };
 
 class DataBlockIter final : public BlockIter<Slice> {
