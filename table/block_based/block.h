@@ -482,6 +482,8 @@ class BlockIter : public InternalIteratorBase<TValue> {
   void CorruptionError();
 
  protected:
+  // Enumeration of possible search algorithms to use when seeking a certain
+  // target key with `Seek`.
   enum SeekStrategy {
     Binary,
     Interpolation,
