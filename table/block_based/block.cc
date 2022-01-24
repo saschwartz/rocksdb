@@ -790,6 +790,8 @@ bool BlockIter<TValue>::Seek(BlockIter<TValue>::SeekStrategy strategy,
     case Interpolation:
       return InterpolationSeek<DecodeKeyFunc>(target, index,
                                               is_index_key_result);
+    // This should never happen, but a failure to provide a default case with
+    // a return value causes a compiler error.
     default:
       return false;
   }
