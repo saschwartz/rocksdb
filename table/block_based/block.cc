@@ -731,7 +731,7 @@ void BlockIter<TValue>::FindKeyAfterSeek(const Slice& target, uint32_t index,
     // Linear search (within restart block) for first key >= target
     uint32_t max_offset;
     if (index + 1 < num_restarts_) {
-      // We are in a non-last restart interval. Since `BinarySeek()` guarantees
+      // We are in a non-last restart interval. Since `Seek()` guarantees
       // the next restart key is strictly greater than `target`, we can
       // terminate upon reaching it without any additional key comparison.
       max_offset = GetRestartPoint(index + 1);
@@ -777,8 +777,8 @@ bool BlockIter<TValue>::Seek(BlockIter<TValue>::SeekStrategy strategy,
   if (restarts_ == 0) {
     // SST files dedicated to range tombstones are written with index blocks
     // that have no keys while also having `num_restarts_ == 1`. This would
-    // cause a problem for `BinarySeek()` as it'd try to access the first key
-    // which does not exist. We identify such blocks by the offset at which
+    // cause a problem for some seek algorithm,  as it'd try to access the first
+    // key which does not exist. We identify such blocks by the offset at which
     // their restarts are stored, and return false to prevent any attempted
     // key accesses.
     return false;
