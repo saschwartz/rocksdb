@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "table/block_based/data_block_footer.h"
 #include "table/format.h"
 #include "util/coding.h"
+#include "util/math128.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -862,6 +864,113 @@ template <class TValue>
 template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
                                           bool* skip_linear_scan) {
+  *skip_linear_scan = false;
+  int64_t left = -1, right = num_restarts_ - 1;
+
+  // This value places a limitation on when we should stop doing new
+  // interpolations, and instead just linear search. This prevents expensive
+  // interpolations which yield diminishing returns as we get very close to
+  // our target value.
+  //
+  // TODO: Tune this value.
+  int64_t guard_size = 0.05 * (num_restarts_ - 1);
+
+  // TODO: This ought to be a user-supplied column option. We assume that at
+  // least this many bytes of each key is (a) identically distributed and
+  // (b) able to be compared to other keys to get a difference.
+  int16_t bytes_to_compare = 8;
+
+  // Fetch the relevant comparison bits for the left key.
+  uint32_t left_shared, left_non_shared;
+  uint32_t left_region_offset =
+      GetRestartPoint(static_cast<uint32_t>(left + 1));
+  const char* left_key_ptr =
+      DecodeKeyFunc()(data_ + left_region_offset, data_ + restarts_,
+                      &left_shared, &left_non_shared);
+
+  // Fetch the relevant comparison bits for the right key.
+  uint32_t right_shared, right_non_shared;
+  uint32_t right_region_offset = GetRestartPoint(static_cast<uint32_t>(right));
+  const char* right_key_ptr =
+      DecodeKeyFunc()(data_ + right_region_offset, data_ + restarts_,
+                      &right_shared, &right_non_shared);
+
+  // Because we are using exactly 8 bytes of the key while prototyping, we
+  // can just treat those bytes as an unsigned 64 bit integer to get the
+  // difference between keys. Then, use that difference to calculate the slope
+  // of keys across restart arrays.
+  //
+  // TODO: This is hacky just for a proof of concept. Later on, we'll need to
+  // add some sort of abstract `Difference` method to the Comparator interface,
+  // which will handle difference in endianness, as well as any quirks of key
+  // ordering.
+  uint64_t left_key =
+      EndianSwapValue(*reinterpret_cast<const uint64_t*>(left_key_ptr));
+  uint64_t right_key =
+      EndianSwapValue(*reinterpret_cast<const uint64_t*>(right_key_ptr));
+  assert(right_key > left_key);
+  uint64_t key_difference = right_key - left_key;
+  float slope =
+      (num_restarts_ - 1) / static_cast<float>((right_key - left_key));
+  std::cout << "Slope is: " << num_restarts_ - 1 << " / "
+            << right_key - left_key << " = " << slope << std::endl;
+
+  CorruptionError();
+  return false;
+
+  //// TODO: Debugging only, remove this block.
+  // if (true) {
+  // std::cout << "Left bytes:" << std::endl;
+  //// TODO: Swap endian value.
+  // std::cout << "As 64 bit int: "
+  //<< *reinterpret_cast<const uint64_t*>(left_key.data())
+  //<< std::endl;
+  // std::cout << "As 64 bit int (endian swapped): "
+  //<< EndianSwapValue(*reinterpret_cast<const uint64_t*>((left_key.data())))
+  //<< std::endl;
+  // for (int i = 0; i < bytes_to_compare; i++) {
+  // std::cout << std::hex << (0xff & (unsigned int)*(left_key.data() + i))
+  //<< " ";
+  //}
+  // std::cout << std::endl;
+  // std::cout << "Right bytes:" << std::endl;
+  // std::cout << "As 64 bit int: "
+  //<< *reinterpret_cast<const uint64_t*>(right_key.data())
+  //<< std::endl;
+  // std::cout << "As 64 bit int (endian swapped): "
+  //<< EndianSwapValue(*reinterpret_cast<const uint64_t*>((right_key.data())))
+  //<< std::endl;
+  // for (int i = 0; i < bytes_to_compare; i++) {
+  // std::cout << std::hex << (0xff & (unsigned int)*(right_key.data() + i))
+  //<< " ";
+  //}
+  // std::cout << std::endl;
+  // CorruptionError();
+  // return false;
+  //}
+
+  // Loop invariants:
+  // - Restart key at index `left` is less than or equal to the target key. The
+  //   sentinel index `-1` is considered to have a key that is less than all
+  //   keys.
+  // - Any restart keys after index `right` are strictly greater than the target
+  //   key.
+  while (left != right) {
+    // TODO:
+    //
+    // 1. Go left, or right, or return, depending on V[expected] compared with
+    //    target.
+    //
+    // 2. Update expected index via fixed point arithmetic. The necessary
+    //    equation is:
+    //    expected = expected + ⌊(y ∗ −V [expected]) ⊗ slope⌋
+    //    Need to ensure to use fixed point arithmetic.
+    //
+    // 3. If expected + guard_size >= right or expected - guard_size <= left,
+    //    break and do a sequential search in the relevant direction.
+    break;
+  }
+
   return false;
 }
 
