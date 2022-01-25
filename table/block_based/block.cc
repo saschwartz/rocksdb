@@ -912,42 +912,19 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   uint64_t key_difference = right_key - left_key;
   float slope =
       (num_restarts_ - 1) / static_cast<float>((right_key - left_key));
-  std::cout << "Slope is: " << num_restarts_ - 1 << " / "
-            << right_key - left_key << " = " << slope << std::endl;
 
-  CorruptionError();
-  return false;
+  // Calculate our initial expected value.
+  uint64_t target_key =
+      EndianSwapValue(*reinterpret_cast<const uint64_t*>(target.data()));
+  int64_t expected = left + 1 + (target_key - left_key) * slope;
 
-  //// TODO: Debugging only, remove this block.
-  // if (true) {
-  // std::cout << "Left bytes:" << std::endl;
-  //// TODO: Swap endian value.
-  // std::cout << "As 64 bit int: "
-  //<< *reinterpret_cast<const uint64_t*>(left_key.data())
-  //<< std::endl;
-  // std::cout << "As 64 bit int (endian swapped): "
-  //<< EndianSwapValue(*reinterpret_cast<const uint64_t*>((left_key.data())))
-  //<< std::endl;
-  // for (int i = 0; i < bytes_to_compare; i++) {
-  // std::cout << std::hex << (0xff & (unsigned int)*(left_key.data() + i))
-  //<< " ";
-  //}
-  // std::cout << std::endl;
-  // std::cout << "Right bytes:" << std::endl;
-  // std::cout << "As 64 bit int: "
-  //<< *reinterpret_cast<const uint64_t*>(right_key.data())
-  //<< std::endl;
-  // std::cout << "As 64 bit int (endian swapped): "
-  //<< EndianSwapValue(*reinterpret_cast<const uint64_t*>((right_key.data())))
-  //<< std::endl;
-  // for (int i = 0; i < bytes_to_compare; i++) {
-  // std::cout << std::hex << (0xff & (unsigned int)*(right_key.data() + i))
-  //<< " ";
-  //}
-  // std::cout << std::endl;
+  std::cout << "Num restarts: " << right << " low value: " << left_key
+            << " high value: " << right_key << " target value: " << target_key
+            << " target_key - left_key: " << target_key - left_key
+            << " slope: " << slope << " interpolated index: " << expected
+            << std::endl;
   // CorruptionError();
   // return false;
-  //}
 
   // Loop invariants:
   // - Restart key at index `left` is less than or equal to the target key. The
@@ -968,9 +945,52 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     //
     // 3. If expected + guard_size >= right or expected - guard_size <= left,
     //    break and do a sequential search in the relevant direction.
-    break;
+    uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(expected));
+    uint32_t shared, non_shared;
+    const char* expected_key_ptr = DecodeKeyFunc()(
+        data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+    uint64_t key_at_expected =
+        EndianSwapValue(*reinterpret_cast<const uint64_t*>(expected_key_ptr));
+
+    std::cout << " target value: " << target_key << " slope: " << slope
+              << " interpolated index: " << expected << " left: " << left
+              << " right: " << right << std::endl;
+
+    Slice expected_key(expected_key_ptr, non_shared);
+    raw_key_.SetKey(expected_key, false /* copy */);
+    int cmp = CompareCurrentKey(target);
+    if (cmp < 0) {
+      // Go right.
+      left = expected;
+    } else if (cmp > 0) {
+      // Go left.
+      right = expected - 1;
+    } else {
+      // The exact key we want is at the start of the restart array with index
+      // `expected`. We may return and skip a linear scan of the restart array
+      // in this case.
+      *skip_linear_scan = true;
+      return true;
+    }
+
+    // Recalculate expected.
+    expected = expected + ((target_key - key_at_expected) * slope);
+
+    // Once we are within the guard_size of our target restart array index,
+    // stop interpolating and linearly search the restart array indices
+    // instead.
+    if (expected + guard_size >= right) {
+      std::cout << "Expected is close to right, switching to linear"
+                << std::endl;
+      break;
+    } else if (expected - guard_size <= left) {
+      std::cout << "Expected is close to left, switching to linear"
+                << std::endl;
+      break;
+    }
   }
 
+  CorruptionError();
   return false;
 }
 
