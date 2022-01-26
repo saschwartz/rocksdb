@@ -865,7 +865,10 @@ template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
                                           bool* skip_linear_scan) {
   *skip_linear_scan = false;
-  int64_t left = -1, right = num_restarts_ - 1;
+
+  // Cutting off last two restart arrays because in default db_bench they
+  // throw the interpolation wildly off. Why?
+  int64_t left = -1, right = num_restarts_ - 3;
 
   // This value places a limitation on when we should stop doing new
   // interpolations, and instead just linear search. This prevents expensive
@@ -913,18 +916,28 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   float slope =
       (num_restarts_ - 1) / static_cast<float>((right_key - left_key));
 
-  // Calculate our initial expected value.
   uint64_t target_key =
       EndianSwapValue(*reinterpret_cast<const uint64_t*>(target.data()));
-  int64_t expected = left + 1 + (target_key - left_key) * slope;
 
-  std::cout << "Num restarts: " << right << " low value: " << left_key
-            << " high value: " << right_key << " target value: " << target_key
-            << " target_key - left_key: " << target_key - left_key
-            << " slope: " << slope << " interpolated index: " << expected
-            << std::endl;
-  // CorruptionError();
-  // return false;
+  // Short-circuit if our target key is less than our left key as our
+  // interpolation will fail.
+  if (target_key < left_key) {
+    *skip_linear_scan = true;
+    *index = 0;
+    return true;
+  }
+
+  // Fail if our target key is greater than our right key as our
+  // interpolation will fail.
+  //
+  // TODO: This happens because we deliberately chop off the last two restart
+  // arrays that have very high numbers of keys. Why do we need to do this?
+  if (target_key > right_key) {
+    return false;
+  }
+
+  // Calculate our initial expected value.
+  int64_t expected = left + 1 + (target_key - left_key) * slope;
 
   // Loop invariants:
   // - Restart key at index `left` is less than or equal to the target key. The
@@ -933,35 +946,21 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   // - Any restart keys after index `right` are strictly greater than the target
   //   key.
   while (left != right) {
-    // TODO:
-    //
-    // 1. Go left, or right, or return, depending on V[expected] compared with
-    //    target.
-    //
-    // 2. Update expected index via fixed point arithmetic. The necessary
-    //    equation is:
-    //    expected = expected + ⌊(y ∗ −V [expected]) ⊗ slope⌋
-    //    Need to ensure to use fixed point arithmetic.
-    //
-    // 3. If expected + guard_size >= right or expected - guard_size <= left,
-    //    break and do a sequential search in the relevant direction.
+    // Compare the expected key (calculated via interpolation) to the current
+    // key.
     uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(expected));
     uint32_t shared, non_shared;
     const char* expected_key_ptr = DecodeKeyFunc()(
         data_ + region_offset, data_ + restarts_, &shared, &non_shared);
     uint64_t key_at_expected =
         EndianSwapValue(*reinterpret_cast<const uint64_t*>(expected_key_ptr));
-
-    std::cout << " target value: " << target_key << " slope: " << slope
-              << " interpolated index: " << expected << " left: " << left
-              << " right: " << right << std::endl;
-
     Slice expected_key(expected_key_ptr, non_shared);
     raw_key_.SetKey(expected_key, false /* copy */);
     int cmp = CompareCurrentKey(target);
+
     if (cmp < 0) {
       // Go right.
-      left = expected;
+      left = expected + 1;
     } else if (cmp > 0) {
       // Go left.
       right = expected - 1;
@@ -969,29 +968,70 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       // The exact key we want is at the start of the restart array with index
       // `expected`. We may return and skip a linear scan of the restart array
       // in this case.
+      *index = static_cast<uint32_t>(expected);
       *skip_linear_scan = true;
-      return true;
     }
 
-    // Recalculate expected.
+    // Recalculate expected by interpolating between expected and target.
     expected = expected + ((target_key - key_at_expected) * slope);
 
-    // Once we are within the guard_size of our target restart array index,
-    // stop interpolating and linearly search the restart array indices
-    // instead.
     if (expected + guard_size >= right) {
-      std::cout << "Expected is close to right, switching to linear"
-                << std::endl;
+      // The interval between our expected key and our right boundary is very
+      // small, so just search linearly from right to left.
+
+      region_offset = GetRestartPoint(static_cast<uint32_t>(right));
+      expected_key_ptr = DecodeKeyFunc()(
+          data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+      expected_key = Slice(expected_key_ptr, non_shared);
+      raw_key_.SetKey(expected_key_ptr, false /* copy */);
+
+      while (CompareCurrentKey(target) > 0) {
+        right -= 1;
+        region_offset = GetRestartPoint(static_cast<uint32_t>(right));
+        expected_key_ptr = DecodeKeyFunc()(
+            data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+        expected_key = Slice(expected_key_ptr, non_shared);
+        raw_key_.SetKey(expected_key, false /* copy */);
+      }
+
+      if (CompareCurrentKey(target) == 0) {
+        *index = right;
+        *skip_linear_scan = true;
+      } else {
+        *index = right + 1;
+      }
+
       break;
+
     } else if (expected - guard_size <= left) {
-      std::cout << "Expected is close to left, switching to linear"
-                << std::endl;
+      // The interval between our expected key and our left boundary is very
+      // small, so just search linearly from left to right.
+
+      region_offset = GetRestartPoint(static_cast<uint32_t>(left));
+      expected_key_ptr = DecodeKeyFunc()(
+          data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+      expected_key = Slice(expected_key_ptr, non_shared);
+      raw_key_.SetKey(expected_key_ptr, false /* copy */);
+
+      while (CompareCurrentKey(target) < 0) {
+        left += 1;
+        region_offset = GetRestartPoint(static_cast<uint32_t>(left));
+        expected_key_ptr = DecodeKeyFunc()(
+            data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+        expected_key = Slice(expected_key_ptr, non_shared);
+        raw_key_.SetKey(expected_key, false /* copy */);
+      }
+
+      *index = left;
+      if (CompareCurrentKey(target) == 0) {
+        *skip_linear_scan = true;
+      }
+
       break;
     }
   }
 
-  CorruptionError();
-  return false;
+  return true;
 }
 
 // Compare target key and the block key of the block of `block_index`.
