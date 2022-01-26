@@ -868,7 +868,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
 
   // Cutting off last two restart arrays because in default db_bench they
   // throw the interpolation wildly off. Why?
-  int64_t left = -1, right = num_restarts_ - 3;
+  int64_t left = 0, right = num_restarts_ - 3;
 
   // This value places a limitation on when we should stop doing new
   // interpolations, and instead just linear search. This prevents expensive
@@ -883,21 +883,37 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   // (b) able to be compared to other keys to get a difference.
   int16_t bytes_to_compare = 8;
 
-  // Fetch the relevant comparison bits for the left key.
-  uint32_t left_shared, left_non_shared;
-  uint32_t left_region_offset =
-      GetRestartPoint(static_cast<uint32_t>(left + 1));
-  const char* left_key_ptr =
-      DecodeKeyFunc()(data_ + left_region_offset, data_ + restarts_,
-                      &left_shared, &left_non_shared);
+  // Short-circuit if our target key is less than our left key as our
+  // interpolation will fail.
+  uint32_t shared, non_shared;
+  uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(left));
+  const char* left_key_ptr = DecodeKeyFunc()(
+      data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+  Slice left_key(left_key_ptr, non_shared);
+  raw_key_.SetKey(left_key, false /* copy */);
+  int cmp = CompareCurrentKey(target);
+  if (cmp > 0) {
+    *skip_linear_scan = true;
+    *index = 0;
+    return true;
+  }
 
-  // Fetch the relevant comparison bits for the right key.
-  uint32_t right_shared, right_non_shared;
-  uint32_t right_region_offset = GetRestartPoint(static_cast<uint32_t>(right));
-  const char* right_key_ptr =
-      DecodeKeyFunc()(data_ + right_region_offset, data_ + restarts_,
-                      &right_shared, &right_non_shared);
+  // Use BinarySeek if our target key is greater than our right key as our
+  // interpolation will fail.
+  //
+  // TODO: This happens because we deliberately chop off the last two restart
+  // arrays that have very high numbers of keys. Why do we need to do this?
+  region_offset = GetRestartPoint(static_cast<uint32_t>(right));
+  const char* right_key_ptr = DecodeKeyFunc()(
+      data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+  Slice right_key(right_key_ptr, non_shared);
+  raw_key_.SetKey(right_key, false /* copy */);
+  cmp = CompareCurrentKey(target);
+  if (cmp < 0) {
+    return BinarySeek<DecodeKeyFunc>(target, index, skip_linear_scan);
+  }
 
+  // Fetch the relevant comparison bits for the right, left and target keys.
   // Because we are using exactly 8 bytes of the key while prototyping, we
   // can just treat those bytes as an unsigned 64 bit integer to get the
   // difference between keys. Then, use that difference to calculate the slope
@@ -907,37 +923,19 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   // add some sort of abstract `Difference` method to the Comparator interface,
   // which will handle difference in endianness, as well as any quirks of key
   // ordering.
-  uint64_t left_key =
+  uint64_t left_key_decoded =
       EndianSwapValue(*reinterpret_cast<const uint64_t*>(left_key_ptr));
-  uint64_t right_key =
+  uint64_t right_key_decoded =
       EndianSwapValue(*reinterpret_cast<const uint64_t*>(right_key_ptr));
-  assert(right_key > left_key);
-  uint64_t key_difference = right_key - left_key;
-  float slope =
-      (num_restarts_ - 1) / static_cast<float>((right_key - left_key));
-
-  uint64_t target_key =
+  uint64_t target_key_decoded =
       EndianSwapValue(*reinterpret_cast<const uint64_t*>(target.data()));
 
-  // Short-circuit if our target key is less than our left key as our
-  // interpolation will fail.
-  if (target_key < left_key) {
-    *skip_linear_scan = true;
-    *index = 0;
-    return true;
-  }
-
-  // Fail if our target key is greater than our right key as our
-  // interpolation will fail.
-  //
-  // TODO: This happens because we deliberately chop off the last two restart
-  // arrays that have very high numbers of keys. Why do we need to do this?
-  if (target_key > right_key) {
-    return false;
-  }
+  // Calculate the slope across our interpolation range.
+  uint64_t key_difference = right_key_decoded - left_key_decoded;
+  float slope = (num_restarts_ - 1) / static_cast<float>(key_difference);
 
   // Calculate our initial expected value.
-  int64_t expected = left + 1 + (target_key - left_key) * slope;
+  int64_t expected = left + (target_key_decoded - left_key_decoded) * slope;
 
   // Loop invariants:
   // - Restart key at index `left` is less than or equal to the target key. The
@@ -948,15 +946,14 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   while (left != right) {
     // Compare the expected key (calculated via interpolation) to the current
     // key.
-    uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(expected));
-    uint32_t shared, non_shared;
+    region_offset = GetRestartPoint(static_cast<uint32_t>(expected));
     const char* expected_key_ptr = DecodeKeyFunc()(
         data_ + region_offset, data_ + restarts_, &shared, &non_shared);
     uint64_t key_at_expected =
         EndianSwapValue(*reinterpret_cast<const uint64_t*>(expected_key_ptr));
     Slice expected_key(expected_key_ptr, non_shared);
     raw_key_.SetKey(expected_key, false /* copy */);
-    int cmp = CompareCurrentKey(target);
+    cmp = CompareCurrentKey(target);
 
     if (cmp < 0) {
       // Go right.
@@ -973,7 +970,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     }
 
     // Recalculate expected by interpolating between expected and target.
-    expected = expected + ((target_key - key_at_expected) * slope);
+    expected = expected + ((target_key_decoded - key_at_expected) * slope);
 
     if (expected + guard_size >= right) {
       // The interval between our expected key and our right boundary is very
@@ -994,6 +991,8 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
         raw_key_.SetKey(expected_key, false /* copy */);
       }
 
+      // Now, the key at index `right` is <= target, while the key at index
+      // `right + 1` is > target.
       if (CompareCurrentKey(target) == 0) {
         *index = right;
         *skip_linear_scan = true;
@@ -1022,6 +1021,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
         raw_key_.SetKey(expected_key, false /* copy */);
       }
 
+      // Now, the key at index `left` is >= target.
       *index = left;
       if (CompareCurrentKey(target) == 0) {
         *skip_linear_scan = true;
