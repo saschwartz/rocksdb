@@ -1000,8 +1000,6 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       *index = right;
       if (CompareCurrentKey(target) == 0) {
         *skip_linear_scan = true;
-      } else {
-        *index = right;
       }
 
       break;
