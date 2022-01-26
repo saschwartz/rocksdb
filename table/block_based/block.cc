@@ -829,6 +829,7 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
     }
     Slice mid_key(key_ptr, non_shared);
     raw_key_.SetKey(mid_key, false /* copy */);
+
     int cmp = CompareCurrentKey(target);
     if (cmp < 0) {
       // Key at "mid" is smaller than "target". Therefore all
@@ -876,7 +877,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   // our target value.
   //
   // TODO: Tune this value.
-  int64_t guard_size = 0.05 * (num_restarts_ - 1);
+  int64_t guard_size = 10;
 
   // TODO: This ought to be a user-supplied column option. We assume that at
   // least this many bytes of each key is (a) identically distributed and
@@ -957,7 +958,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
 
     if (cmp < 0) {
       // Go right.
-      left = expected + 1;
+      left = expected;
     } else if (cmp > 0) {
       // Go left.
       right = expected - 1;
@@ -967,10 +968,13 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       // in this case.
       *index = static_cast<uint32_t>(expected);
       *skip_linear_scan = true;
+      break;
     }
 
     // Recalculate expected by interpolating between expected and target.
-    expected = expected + ((target_key_decoded - key_at_expected) * slope);
+    expected = expected + ((static_cast<int64_t>(target_key_decoded) -
+                            static_cast<int64_t>(key_at_expected)) *
+                           slope);
 
     if (expected + guard_size >= right) {
       // The interval between our expected key and our right boundary is very
@@ -980,7 +984,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       expected_key_ptr = DecodeKeyFunc()(
           data_ + region_offset, data_ + restarts_, &shared, &non_shared);
       expected_key = Slice(expected_key_ptr, non_shared);
-      raw_key_.SetKey(expected_key_ptr, false /* copy */);
+      raw_key_.SetKey(expected_key, false /* copy */);
 
       while (CompareCurrentKey(target) > 0) {
         right -= 1;
@@ -991,13 +995,13 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
         raw_key_.SetKey(expected_key, false /* copy */);
       }
 
-      // Now, the key at index `right` is <= target, while the key at index
-      // `right + 1` is > target.
+      // Now, the key at index `right` is <= `target`, while the key at index
+      // `right + 1` is > `target`. This obeys the contract required by `Seek`.
+      *index = right;
       if (CompareCurrentKey(target) == 0) {
-        *index = right;
         *skip_linear_scan = true;
       } else {
-        *index = right + 1;
+        *index = right;
       }
 
       break;
@@ -1021,10 +1025,14 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
         raw_key_.SetKey(expected_key, false /* copy */);
       }
 
-      // Now, the key at index `left` is >= target.
-      *index = left;
+      // Now, the key at index `left` is >= `target`. Thus, to obey the contract
+      // required by `Seek`, we must set `*index` to `left - 1` such that
+      // `*index + 1` > `target`, except if `*index == target`.
       if (CompareCurrentKey(target) == 0) {
         *skip_linear_scan = true;
+        *index = left;
+      } else {
+        *index = left - 1;
       }
 
       break;
