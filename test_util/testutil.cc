@@ -95,8 +95,12 @@ class Uint64ComparatorImpl : public Comparator {
   const char* Name() const override { return "rocksdb.Uint64Comparator"; }
 
   double Difference(const Slice& a, const Slice& b) const override {
-    // TODO: Provide a real implementation here.
-    return 0;
+    const uint64_t* left = reinterpret_cast<const uint64_t*>(a.data());
+    const uint64_t* right = reinterpret_cast<const uint64_t*>(b.data());
+    uint64_t leftValue, rightValue;
+    GetUnaligned(left, &leftValue);
+    GetUnaligned(right, &rightValue);
+    return static_cast<double>(leftValue - rightValue);
   }
 
   int Compare(const Slice& a, const Slice& b) const override {
