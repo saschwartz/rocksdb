@@ -26,7 +26,6 @@
 #include "table/block_based/data_block_footer.h"
 #include "table/format.h"
 #include "util/coding.h"
-#include "util/math128.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -879,11 +878,6 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   // TODO: Tune this value.
   int64_t guard_size = 10;
 
-  // TODO: This ought to be a user-supplied column option. We assume that at
-  // least this many bytes of each key is (a) identically distributed and
-  // (b) able to be compared to other keys to get a difference.
-  int16_t bytes_to_compare = 8;
-
   // Short-circuit if our target key is less than our left key as our
   // interpolation will fail.
   uint32_t shared, non_shared;
@@ -914,29 +908,13 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     return BinarySeek<DecodeKeyFunc>(target, index, skip_linear_scan);
   }
 
-  // Fetch the relevant comparison bits for the right, left and target keys.
-  // Because we are using exactly 8 bytes of the key while prototyping, we
-  // can just treat those bytes as an unsigned 64 bit integer to get the
-  // difference between keys. Then, use that difference to calculate the slope
-  // of keys across restart arrays.
-  //
-  // TODO: This is hacky just for a proof of concept. Later on, we'll need to
-  // add some sort of abstract `Difference` method to the Comparator interface,
-  // which will handle difference in endianness, as well as any quirks of key
-  // ordering.
-  uint64_t left_key_decoded =
-      EndianSwapValue(*reinterpret_cast<const uint64_t*>(left_key_ptr));
-  uint64_t right_key_decoded =
-      EndianSwapValue(*reinterpret_cast<const uint64_t*>(right_key_ptr));
-  uint64_t target_key_decoded =
-      EndianSwapValue(*reinterpret_cast<const uint64_t*>(target.data()));
-
   // Calculate the slope across our interpolation range.
-  uint64_t key_difference = right_key_decoded - left_key_decoded;
-  float slope = (num_restarts_ - 1) / static_cast<float>(key_difference);
+  double slope = (num_restarts_ - 1) / (
+      BytewiseComparator()->Difference( right_key, left_key));
 
   // Calculate our initial expected value.
-  int64_t expected = left + (target_key_decoded - left_key_decoded) * slope;
+  int64_t expected = left + (
+      BytewiseComparator()->Difference(target, left_key) * slope);
 
   // Loop invariants:
   // - Restart key at index `left` is less than or equal to the target key. The
@@ -950,8 +928,6 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     region_offset = GetRestartPoint(static_cast<uint32_t>(expected));
     const char* expected_key_ptr = DecodeKeyFunc()(
         data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-    uint64_t key_at_expected =
-        EndianSwapValue(*reinterpret_cast<const uint64_t*>(expected_key_ptr));
     Slice expected_key(expected_key_ptr, non_shared);
     raw_key_.SetKey(expected_key, false /* copy */);
     cmp = CompareCurrentKey(target);
@@ -972,9 +948,8 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     }
 
     // Recalculate expected by interpolating between expected and target.
-    expected = expected + ((static_cast<int64_t>(target_key_decoded) -
-                            static_cast<int64_t>(key_at_expected)) *
-                           slope);
+    expected = expected + (
+        BytewiseComparator()->Difference(target, expected_key) * slope);
 
     if (expected + guard_size >= right) {
       // The interval between our expected key and our right boundary is very

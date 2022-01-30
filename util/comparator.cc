@@ -20,6 +20,7 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/utilities/customizable_util.h"
 #include "rocksdb/utilities/object_registry.h"
+#include "util/math128.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -35,9 +36,13 @@ class BytewiseComparatorImpl : public Comparator {
   }
 
   double Difference(const Slice&a, const Slice& b) const override {
-    // TODO: Provide a real implementation here or in the Slice implementation.
-    // Probably here makes more sense.
-    return 0;
+    // TODO: can't assume uint64_t reinterpret casts here. We need a more
+    // general way of calculating difference.
+    uint64_t right =
+        EndianSwapValue(*reinterpret_cast<const uint64_t*>(a.data()));
+    uint64_t left =
+        EndianSwapValue(*reinterpret_cast<const uint64_t*>(b.data()));
+    return static_cast<double>(right - left);
   }
 
   bool Equal(const Slice& a, const Slice& b) const override { return a == b; }
