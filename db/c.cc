@@ -271,9 +271,17 @@ struct rocksdb_comparator_t : public Comparator {
       void*,
       const char* a, size_t alen,
       const char* b, size_t blen);
+  double (*difference_)(
+      void*,
+      const char* a, size_t alen,
+      const char* b, size_t blen);
   const char* (*name_)(void*);
 
   ~rocksdb_comparator_t() override { (*destructor_)(state_); }
+
+  double Difference(const Slice& a, const Slice& b) const override {
+    return (*difference_)(state_, a.data(), a.size(), b.data(), b.size());
+  }
 
   int Compare(const Slice& a, const Slice& b) const override {
     return (*compare_)(state_, a.data(), a.size(), b.data(), b.size());

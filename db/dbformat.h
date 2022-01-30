@@ -250,6 +250,7 @@ class InternalKeyComparator
 
   virtual const char* Name() const override;
   virtual int Compare(const Slice& a, const Slice& b) const override;
+  virtual double Difference(const Slice&a, const Slice& b) const override;
   // Same as Compare except that it excludes the value type from comparison
   virtual int CompareKeySeq(const Slice& a, const Slice& b) const;
   virtual void FindShortestSeparator(std::string* start,
@@ -703,6 +704,12 @@ struct RangeTombstone {
     return InternalKey(end_key_, kMaxSequenceNumber, kTypeRangeDeletion);
   }
 };
+
+inline double InternalKeyComparator::Difference(const Slice& akey,
+                                                const Slice& bkey) const {
+  // TODO: Provide a real implementation here.
+  return 0;
+}
 
 inline int InternalKeyComparator::Compare(const Slice& akey,
                                           const Slice& bkey) const {

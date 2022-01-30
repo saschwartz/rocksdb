@@ -34,6 +34,12 @@ class BytewiseComparatorImpl : public Comparator {
     return a.compare(b);
   }
 
+  double Difference(const Slice&a, const Slice& b) const override {
+    // TODO: Provide a real implementation here or in the Slice implementation.
+    // Probably here makes more sense.
+    return 0;
+  }
+
   bool Equal(const Slice& a, const Slice& b) const override { return a == b; }
 
   void FindShortestSeparator(std::string* start,
@@ -153,6 +159,12 @@ class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
 
   int Compare(const Slice& a, const Slice& b) const override {
     return -a.compare(b);
+  }
+
+  double Difference(const Slice&a, const Slice& b) const override {
+    // TODO: Provide a real implementation here or in the Slice implementation.
+    // Probably here makes more sense.
+    return 0;
   }
 
   void FindShortestSeparator(std::string* start,

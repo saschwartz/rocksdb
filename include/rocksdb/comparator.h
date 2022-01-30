@@ -56,6 +56,13 @@ class Comparator : public Customizable {
   // timestamp comes first.
   virtual int Compare(const Slice& a, const Slice& b) const = 0;
 
+  // Takes the difference (distance) between two slices. The implementation
+  // of this interface is intended to fulfil the following properties:
+  // (1) Non-strict. That is, non-equal keys may report a difference of zero.
+  // (2) Approximately composable. That is, `Difference(a, b) +
+  //     `Difference(b, c)` is approximately equal to `Difference(a, b)`.
+  virtual double Difference(const Slice&a, const Slice& b) const = 0;
+
   // Compares two slices for equality. The following invariant should always
   // hold (and is the default implementation):
   //   Equal(a, b) iff Compare(a, b) == 0

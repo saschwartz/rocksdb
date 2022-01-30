@@ -112,6 +112,9 @@ class SanityTestSpecialComparator : public SanityTest {
     virtual int Compare(const Slice& a, const Slice& b) const override {
       return BytewiseComparator()->Compare(a, b);
     }
+    virtual double Difference(const Slice& a, const Slice& b) const override {
+      return BytewiseComparator()->Difference(a, b);
+    }
     virtual void FindShortestSeparator(std::string* s,
                                        const Slice& l) const override {
       BytewiseComparator()->FindShortestSeparator(s, l);

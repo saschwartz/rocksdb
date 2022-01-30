@@ -94,6 +94,11 @@ class Uint64ComparatorImpl : public Comparator {
 
   const char* Name() const override { return "rocksdb.Uint64Comparator"; }
 
+  double Difference(const Slice& a, const Slice& b) const override {
+    // TODO: Provide a real implementation here.
+    return 0;
+  }
+
   int Compare(const Slice& a, const Slice& b) const override {
     assert(a.size() == sizeof(uint64_t) && b.size() == sizeof(uint64_t));
     const uint64_t* left = reinterpret_cast<const uint64_t*>(a.data());
@@ -131,6 +136,12 @@ class ComparatorWithU64TsImpl : public Comparator {
   const char* Name() const override { return "ComparatorWithU64Ts"; }
   void FindShortSuccessor(std::string*) const override {}
   void FindShortestSeparator(std::string*, const Slice&) const override {}
+
+  double Difference(const Slice&a, const Slice&b) const override {
+    // TODO: Provide a real implementation here.
+    return 0;
+  }
+
   int Compare(const Slice& a, const Slice& b) const override {
     int ret = CompareWithoutTimestamp(a, b);
     size_t ts_sz = timestamp_size();
