@@ -61,7 +61,7 @@ class Comparator : public Customizable {
   // (1) Non-strict. That is, non-equal keys may report a difference of zero.
   // (2) Approximately composable. That is, `Difference(a, b) +
   //     `Difference(b, c)` is approximately equal to `Difference(a, b)`.
-  virtual double Difference(const Slice&a, const Slice& b) const = 0;
+  virtual int64_t Difference(const Slice& a, const Slice& b) const = 0;
 
   // Compares two slices for equality. The following invariant should always
   // hold (and is the default implementation):

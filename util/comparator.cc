@@ -35,14 +35,28 @@ class BytewiseComparatorImpl : public Comparator {
     return a.compare(b);
   }
 
-  double Difference(const Slice&a, const Slice& b) const override {
-    // TODO: can't assume uint64_t reinterpret casts here. We need a more
-    // general way of calculating difference.
-    uint64_t right =
-        EndianSwapValue(*reinterpret_cast<const uint64_t*>(a.data()));
-    uint64_t left =
-        EndianSwapValue(*reinterpret_cast<const uint64_t*>(b.data()));
-    return static_cast<double>(right - left);
+  int64_t Difference(const Slice& a, const Slice& b) const override {
+    // Can't compare two slices with different lengths, and we can only
+    // take the difference across at most 8 bytes.
+    assert(a.size() == b.size() <= sizeof(uint64_t));
+
+    // This is always safe because internal keys include an 8-byte extension,
+    // so we have at least 8 bytes that we can decode. We need to swap the
+    // endianness because the DecodeFixed* functions expect little-endian
+    // input, and BytewiseComparator operates in a big-endian fashion.
+    uint64_t right = EndianSwapValue(DecodeFixed64(a.data()));
+    uint64_t left = EndianSwapValue(DecodeFixed64(b.data()));
+
+    // Shift away the irrelevant bits.
+    right = right >> (sizeof(uint64_t) - a.size());
+    left = left >> (sizeof(uint64_t) - b.size());
+
+    uint64_t abs_diff = (right > left) ? (right - left) : (left - right);
+    if (abs_diff >= INT64_MAX) {
+      // Avoid overflow.
+      return (right > left) ? INT64_MAX : -INT64_MAX;
+    }
+    return (right > left) ? (int64_t)abs_diff : -(int64_t)abs_diff;
   }
 
   bool Equal(const Slice& a, const Slice& b) const override { return a == b; }
@@ -166,10 +180,28 @@ class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
     return -a.compare(b);
   }
 
-  double Difference(const Slice&a, const Slice& b) const override {
-    // TODO: Provide a real implementation here or in the Slice implementation.
-    // Probably here makes more sense.
-    return 0;
+  int64_t Difference(const Slice& a, const Slice& b) const override {
+    // Can't compare two slices with different lengths, and we can only
+    // take the difference across at most 8 bytes.
+    assert(a.size() == b.size() <= sizeof(uint64_t));
+
+    // This is always safe because internal keys include an 8-byte extension,
+    // so we have at least 8 bytes that we can decode. We do not need to swap
+    // the endianness because the DecodeFixed* functions expect little-endian
+    // input, and ReverseBytewiseComparator operates in a little-endian fashion.
+    uint64_t right = DecodeFixed64(a.data());
+    uint64_t left = DecodeFixed64(b.data());
+
+    // Shift away the irrelevant bits.
+    right = right >> (sizeof(uint64_t) - a.size());
+    left = left >> (sizeof(uint64_t) - b.size());
+
+    uint64_t abs_diff = (right > left) ? (right - left) : (left - right);
+    if (abs_diff >= INT64_MAX) {
+      // Avoid overflow.
+      return (right > left) ? INT64_MAX : -INT64_MAX;
+    }
+    return (right > left) ? (int64_t)abs_diff : -(int64_t)abs_diff;
   }
 
   void FindShortestSeparator(std::string* start,

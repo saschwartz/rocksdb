@@ -88,7 +88,7 @@ class SimpleSuffixReverseComparator : public Comparator {
   static const char* kClassName() { return "SimpleSuffixReverseComparator"; }
   virtual const char* Name() const override { return kClassName(); }
 
-  double Difference(const Slice&a, const Slice& b) const override {
+  int64_t Difference(const Slice& a, const Slice& b) const override {
     // TODO: Provide a real implementation here.
     return 0;
   }

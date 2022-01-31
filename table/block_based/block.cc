@@ -870,6 +870,12 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   // throw the interpolation wildly off. Why?
   int64_t left = 0, right = num_restarts_ - 3;
 
+  // This value represents how many bytes in each key can be assumed to be
+  // uniformly distributed. It may be at most 8.
+  //
+  // TODO: This should be obtained from a column option, rather than hardcoded.
+  const size_t uniformly_distributed_key_bytes = 8;
+
   // This value places a limitation on when we should stop doing new
   // interpolations, and instead just linear search. This prevents expensive
   // interpolations which yield diminishing returns as we get very close to
@@ -884,8 +890,8 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(left));
   const char* left_key_ptr = DecodeKeyFunc()(
       data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-  Slice left_key(left_key_ptr, non_shared);
-  raw_key_.SetKey(left_key, false /* copy */);
+  Slice key_delta(left_key_ptr, non_shared);
+  raw_key_.SetKey(key_delta, false /* copy */);
   int cmp = CompareCurrentKey(target);
   if (cmp > 0) {
     *skip_linear_scan = true;
@@ -901,20 +907,25 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   region_offset = GetRestartPoint(static_cast<uint32_t>(right));
   const char* right_key_ptr = DecodeKeyFunc()(
       data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-  Slice right_key(right_key_ptr, non_shared);
-  raw_key_.SetKey(right_key, false /* copy */);
+  key_delta = Slice(right_key_ptr, non_shared);
+  raw_key_.SetKey(key_delta, false /* copy */);
   cmp = CompareCurrentKey(target);
   if (cmp < 0) {
     return BinarySeek<DecodeKeyFunc>(target, index, skip_linear_scan);
   }
 
   // Calculate the slope across our interpolation range.
-  double slope = (num_restarts_ - 1) / (
-      BytewiseComparator()->Difference( right_key, left_key));
+  double slope = (num_restarts_ - 1) /
+                 static_cast<double>(ucmp().Difference(
+                     Slice(right_key_ptr, uniformly_distributed_key_bytes),
+                     Slice(left_key_ptr, uniformly_distributed_key_bytes)));
 
   // Calculate our initial expected value.
-  int64_t expected = left + (
-      BytewiseComparator()->Difference(target, left_key) * slope);
+  int64_t expected =
+      left + (static_cast<double>(ucmp().Difference(
+                  Slice(target.data(), uniformly_distributed_key_bytes),
+                  Slice(left_key_ptr, uniformly_distributed_key_bytes))) *
+              slope);
 
   // Loop invariants:
   // - Restart key at index `left` is less than or equal to the target key. The
@@ -928,8 +939,8 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     region_offset = GetRestartPoint(static_cast<uint32_t>(expected));
     const char* expected_key_ptr = DecodeKeyFunc()(
         data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-    Slice expected_key(expected_key_ptr, non_shared);
-    raw_key_.SetKey(expected_key, false /* copy */);
+    key_delta = Slice(expected_key_ptr, non_shared);
+    raw_key_.SetKey(key_delta, false /* copy */);
     cmp = CompareCurrentKey(target);
 
     if (cmp < 0) {
@@ -948,8 +959,11 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     }
 
     // Recalculate expected by interpolating between expected and target.
-    expected = expected + (
-        BytewiseComparator()->Difference(target, expected_key) * slope);
+    expected = expected +
+               (static_cast<double>(ucmp().Difference(
+                    Slice(target.data(), uniformly_distributed_key_bytes),
+                    Slice(expected_key_ptr, uniformly_distributed_key_bytes))) *
+                slope);
 
     if (expected + guard_size >= right) {
       // The interval between our expected key and our right boundary is very
@@ -958,16 +972,16 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       region_offset = GetRestartPoint(static_cast<uint32_t>(right));
       expected_key_ptr = DecodeKeyFunc()(
           data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-      expected_key = Slice(expected_key_ptr, non_shared);
-      raw_key_.SetKey(expected_key, false /* copy */);
+      key_delta = Slice(expected_key_ptr, non_shared);
+      raw_key_.SetKey(key_delta, false /* copy */);
 
       while (CompareCurrentKey(target) > 0) {
         right -= 1;
         region_offset = GetRestartPoint(static_cast<uint32_t>(right));
         expected_key_ptr = DecodeKeyFunc()(
             data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-        expected_key = Slice(expected_key_ptr, non_shared);
-        raw_key_.SetKey(expected_key, false /* copy */);
+        key_delta = Slice(expected_key_ptr, non_shared);
+        raw_key_.SetKey(key_delta, false /* copy */);
       }
 
       // Now, the key at index `right` is <= `target`, while the key at index
@@ -986,16 +1000,16 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       region_offset = GetRestartPoint(static_cast<uint32_t>(left));
       expected_key_ptr = DecodeKeyFunc()(
           data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-      expected_key = Slice(expected_key_ptr, non_shared);
-      raw_key_.SetKey(expected_key_ptr, false /* copy */);
+      key_delta = Slice(expected_key_ptr, non_shared);
+      raw_key_.SetKey(key_delta, false /* copy */);
 
       while (CompareCurrentKey(target) < 0) {
         left += 1;
         region_offset = GetRestartPoint(static_cast<uint32_t>(left));
         expected_key_ptr = DecodeKeyFunc()(
             data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-        expected_key = Slice(expected_key_ptr, non_shared);
-        raw_key_.SetKey(expected_key, false /* copy */);
+        key_delta = Slice(expected_key_ptr, non_shared);
+        raw_key_.SetKey(key_delta, false /* copy */);
       }
 
       // Now, the key at index `left` is >= `target`. Thus, to obey the contract

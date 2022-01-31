@@ -2111,7 +2111,7 @@ TEST_F(DBTest, ComparatorCheck) {
     int Compare(const Slice& a, const Slice& b) const override {
       return BytewiseComparator()->Compare(a, b);
     }
-    double Difference(const Slice&a, const Slice& b) const override {
+    int64_t Difference(const Slice& a, const Slice& b) const override {
       return BytewiseComparator()->Difference(a, b);
     }
     void FindShortestSeparator(std::string* s, const Slice& l) const override {

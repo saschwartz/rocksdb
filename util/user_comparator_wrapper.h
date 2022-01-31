@@ -28,7 +28,7 @@ class UserComparatorWrapper final : public Comparator {
 
   const Comparator* user_comparator() const { return user_comparator_; }
 
-  double Difference(const Slice&a, const Slice& b) const override {
+  int64_t Difference(const Slice& a, const Slice& b) const override {
     return user_comparator_->Difference(a, b);
   }
 
