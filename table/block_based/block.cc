@@ -943,11 +943,9 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
               slope);
 
   // Loop invariants:
-  // - Restart key at index `left` is less than or equal to the target key. The
-  //   sentinel index `-1` is considered to have a key that is less than all
-  //   keys.
-  // - Any restart keys after index `right` are strictly greater than the target
-  //   key.
+  // (1) Restart key at index `left` is less than or equal to the target key.
+  // (2) Any restart keys after index `right` are strictly greater than the target
+  //     key.
   while (left != right) {
     // Compare the expected key (calculated via interpolation) to the current
     // key.
