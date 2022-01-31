@@ -885,7 +885,9 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   *skip_linear_scan = false;
 
   // Cutting off last two restart arrays because in default db_bench they
-  // throw the interpolation wildly off. Why?
+  // throw the interpolation wildly off.
+  //
+  // TODO: Why does this happen?
   uint32_t left = 0, right = num_restarts_ - 3;
 
   // This value represents how many bytes in each key can be assumed to be
