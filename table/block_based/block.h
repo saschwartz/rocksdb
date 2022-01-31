@@ -504,6 +504,9 @@ class BlockIter : public InternalIteratorBase<TValue> {
   template <typename DecodeKeyFunc>
   inline bool InterpolationSeek(const Slice& target, uint32_t* index,
                                 bool* is_index_key_result);
+
+  template <typename DecodeKeyFunc>
+  inline const char* SetCurrentKeyToRestartPoint(uint32_t restart_idx);
 };
 
 class DataBlockIter final : public BlockIter<Slice> {

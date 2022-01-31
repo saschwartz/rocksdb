@@ -713,6 +713,29 @@ void IndexBlockIter::DecodeCurrentValue(bool is_shared) {
   }
 }
 
+// Set the current key to the one found at beginning of the restart array
+// at `restart_idx`.
+//
+// Returns a pointer to the decoded key information. If we fail to decode the
+// key, we ensure to appropriately set corruption error information, and return
+// a null value to indicate the error.
+template <class TValue>
+template <typename DecodeKeyFunc>
+const char* BlockIter<TValue>::SetCurrentKeyToRestartPoint(
+    uint32_t restart_idx) {
+  uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(restart_idx));
+  uint32_t shared, non_shared;
+  const char* key_ptr = DecodeKeyFunc()(
+      data_ + region_offset, data_ + restarts_, &shared, &non_shared);
+  if (key_ptr == nullptr || (shared != 0)) {
+    CorruptionError();
+    return nullptr;
+  }
+  Slice key(key_ptr, non_shared);
+  raw_key_.SetKey(key, false /* copy */);
+  return key_ptr;
+}
+
 // After performing a seek to find some target, we have arrived at some index.
 // This index is guaranteed to be for a key <= target.
 //
@@ -818,16 +841,11 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
   while (left != right) {
     // The `mid` is computed by rounding up so it lands in (`left`, `right`].
     int64_t mid = left + (right - left + 1) / 2;
-    uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(mid));
-    uint32_t shared, non_shared;
-    const char* key_ptr = DecodeKeyFunc()(
-        data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-    if (key_ptr == nullptr || (shared != 0)) {
-      CorruptionError();
+    const char* mid_key_ptr =
+        SetCurrentKeyToRestartPoint<DecodeKeyFunc>(static_cast<uint32_t>(mid));
+    if (!mid_key_ptr) {
       return false;
     }
-    Slice mid_key(key_ptr, non_shared);
-    raw_key_.SetKey(mid_key, false /* copy */);
 
     int cmp = CompareCurrentKey(target);
     if (cmp < 0) {
@@ -886,12 +904,11 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
 
   // Short-circuit if our target key is less than our left key as our
   // interpolation will fail.
-  uint32_t shared, non_shared;
-  uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(left));
-  const char* left_key_ptr = DecodeKeyFunc()(
-      data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-  Slice key_delta(left_key_ptr, non_shared);
-  raw_key_.SetKey(key_delta, false /* copy */);
+  const char* left_key_ptr =
+      SetCurrentKeyToRestartPoint<DecodeKeyFunc>(static_cast<uint32_t>(left));
+  if (!left_key_ptr) {
+    return false;
+  }
   int cmp = CompareCurrentKey(target);
   if (cmp > 0) {
     *skip_linear_scan = true;
@@ -904,11 +921,11 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   //
   // TODO: This happens because we deliberately chop off the last two restart
   // arrays that have very high numbers of keys. Why do we need to do this?
-  region_offset = GetRestartPoint(static_cast<uint32_t>(right));
-  const char* right_key_ptr = DecodeKeyFunc()(
-      data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-  key_delta = Slice(right_key_ptr, non_shared);
-  raw_key_.SetKey(key_delta, false /* copy */);
+  const char* right_key_ptr =
+      SetCurrentKeyToRestartPoint<DecodeKeyFunc>(static_cast<uint32_t>(right));
+  if (!right_key_ptr) {
+    return false;
+  }
   cmp = CompareCurrentKey(target);
   if (cmp < 0) {
     return BinarySeek<DecodeKeyFunc>(target, index, skip_linear_scan);
@@ -936,11 +953,11 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   while (left != right) {
     // Compare the expected key (calculated via interpolation) to the current
     // key.
-    region_offset = GetRestartPoint(static_cast<uint32_t>(expected));
-    const char* expected_key_ptr = DecodeKeyFunc()(
-        data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-    key_delta = Slice(expected_key_ptr, non_shared);
-    raw_key_.SetKey(key_delta, false /* copy */);
+    const char* expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
+        static_cast<uint32_t>(expected));
+    if (!expected_key_ptr) {
+      return false;
+    }
     cmp = CompareCurrentKey(target);
 
     if (cmp < 0) {
@@ -968,20 +985,18 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     if (expected + guard_size >= right) {
       // The interval between our expected key and our right boundary is very
       // small, so just search linearly from right to left.
-
-      region_offset = GetRestartPoint(static_cast<uint32_t>(right));
-      expected_key_ptr = DecodeKeyFunc()(
-          data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-      key_delta = Slice(expected_key_ptr, non_shared);
-      raw_key_.SetKey(key_delta, false /* copy */);
+      expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
+          static_cast<uint32_t>(right));
+      if (!expected_key_ptr) {
+        return false;
+      }
 
       while (CompareCurrentKey(target) > 0) {
-        right -= 1;
-        region_offset = GetRestartPoint(static_cast<uint32_t>(right));
-        expected_key_ptr = DecodeKeyFunc()(
-            data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-        key_delta = Slice(expected_key_ptr, non_shared);
-        raw_key_.SetKey(key_delta, false /* copy */);
+        expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
+            static_cast<uint32_t>(--right));
+        if (!expected_key_ptr) {
+          return false;
+        }
       }
 
       // Now, the key at index `right` is <= `target`, while the key at index
@@ -996,20 +1011,18 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     } else if (expected - guard_size <= left) {
       // The interval between our expected key and our left boundary is very
       // small, so just search linearly from left to right.
-
-      region_offset = GetRestartPoint(static_cast<uint32_t>(left));
-      expected_key_ptr = DecodeKeyFunc()(
-          data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-      key_delta = Slice(expected_key_ptr, non_shared);
-      raw_key_.SetKey(key_delta, false /* copy */);
+      expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
+          static_cast<uint32_t>(left));
+      if (!expected_key_ptr) {
+        return false;
+      }
 
       while (CompareCurrentKey(target) < 0) {
-        left += 1;
-        region_offset = GetRestartPoint(static_cast<uint32_t>(left));
-        expected_key_ptr = DecodeKeyFunc()(
-            data_ + region_offset, data_ + restarts_, &shared, &non_shared);
-        key_delta = Slice(expected_key_ptr, non_shared);
-        raw_key_.SetKey(key_delta, false /* copy */);
+        expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
+            static_cast<uint32_t>(++left));
+        if (!expected_key_ptr) {
+          return false;
+        }
       }
 
       // Now, the key at index `left` is >= `target`. Thus, to obey the contract
