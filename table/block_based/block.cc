@@ -886,7 +886,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
 
   // Cutting off last two restart arrays because in default db_bench they
   // throw the interpolation wildly off. Why?
-  int64_t left = 0, right = num_restarts_ - 3;
+  uint32_t left = 0, right = num_restarts_ - 3;
 
   // This value represents how many bytes in each key can be assumed to be
   // uniformly distributed. It may be at most 8.
@@ -904,8 +904,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
 
   // Short-circuit if our target key is less than our left key as our
   // interpolation will fail.
-  const char* left_key_ptr =
-      SetCurrentKeyToRestartPoint<DecodeKeyFunc>(static_cast<uint32_t>(left));
+  const char* left_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(left);
   if (!left_key_ptr) {
     return false;
   }
@@ -921,8 +920,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   //
   // TODO: This happens because we deliberately chop off the last two restart
   // arrays that have very high numbers of keys. Why do we need to do this?
-  const char* right_key_ptr =
-      SetCurrentKeyToRestartPoint<DecodeKeyFunc>(static_cast<uint32_t>(right));
+  const char* right_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(right);
   if (!right_key_ptr) {
     return false;
   }
@@ -938,7 +936,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
                      Slice(left_key_ptr, uniformly_distributed_key_bytes)));
 
   // Calculate our initial expected value.
-  int64_t expected =
+  uint32_t expected =
       left + (static_cast<double>(ucmp().Difference(
                   Slice(target.data(), uniformly_distributed_key_bytes),
                   Slice(left_key_ptr, uniformly_distributed_key_bytes))) *
@@ -953,8 +951,8 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   while (left != right) {
     // Compare the expected key (calculated via interpolation) to the current
     // key.
-    const char* expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
-        static_cast<uint32_t>(expected));
+    const char* expected_key_ptr =
+        SetCurrentKeyToRestartPoint<DecodeKeyFunc>(expected);
     if (!expected_key_ptr) {
       return false;
     }
@@ -970,7 +968,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       // The exact key we want is at the start of the restart array with index
       // `expected`. We may return and skip a linear scan of the restart array
       // in this case.
-      *index = static_cast<uint32_t>(expected);
+      *index = expected;
       *skip_linear_scan = true;
       break;
     }
@@ -985,15 +983,13 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     if (expected + guard_size >= right) {
       // The interval between our expected key and our right boundary is very
       // small, so just search linearly from right to left.
-      expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
-          static_cast<uint32_t>(right));
+      expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(right);
       if (!expected_key_ptr) {
         return false;
       }
 
       while (CompareCurrentKey(target) > 0) {
-        expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
-            static_cast<uint32_t>(--right));
+        expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(--right);
         if (!expected_key_ptr) {
           return false;
         }
@@ -1002,39 +998,30 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       // Now, the key at index `right` is <= `target`, while the key at index
       // `right + 1` is > `target`. This obeys the contract required by `Seek`.
       *index = right;
-      if (CompareCurrentKey(target) == 0) {
-        *skip_linear_scan = true;
-      }
+      *skip_linear_scan = (CompareCurrentKey(target) == 0);
 
       break;
 
     } else if (expected - guard_size <= left) {
       // The interval between our expected key and our left boundary is very
       // small, so just search linearly from left to right.
-      expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
-          static_cast<uint32_t>(left));
+      expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(left);
       if (!expected_key_ptr) {
         return false;
       }
 
       while (CompareCurrentKey(target) < 0) {
-        expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(
-            static_cast<uint32_t>(++left));
+        expected_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(++left);
         if (!expected_key_ptr) {
           return false;
         }
       }
 
-      // Now, the key at index `left` is >= `target`. Thus, to obey the contract
-      // required by `Seek`, we must set `*index` to `left - 1` such that
-      // `*index + 1` > `target`, except if `*index == target`.
-      if (CompareCurrentKey(target) == 0) {
-        *skip_linear_scan = true;
-        *index = left;
-      } else {
-        *index = left - 1;
-      }
-
+      // Now, the key at index `left` is >= `target`. Note that if we have the
+      // cast where `left > target`, we need to set `*index` to `left - 1`,
+      // to fulfil the contract expected by `Seek`.
+      *skip_linear_scan = (CompareCurrentKey(target) == 0);
+      *index = *skip_linear_scan ? left : (left - 1);
       break;
     }
   }
