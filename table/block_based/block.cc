@@ -999,7 +999,6 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
       // `right + 1` is > `target`. This obeys the contract required by `Seek`.
       *index = right;
       *skip_linear_scan = (CompareCurrentKey(target) == 0);
-
       break;
 
     } else if (expected - guard_size <= left) {
