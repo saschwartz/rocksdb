@@ -893,7 +893,8 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   char* b = std::getenv("INTERPOLATION_SEEK_UNIFORM_BYTES");
   const size_t uniformly_distributed_key_bytes =
       b ? std::stoi(std::string(b)) : 8;
-  if (uniformly_distributed_key_bytes<1 | uniformly_distributed_key_bytes> 8) {
+  if (uniformly_distributed_key_bytes < 1 ||
+      uniformly_distributed_key_bytes > 8) {
     return false;
   }
 
