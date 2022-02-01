@@ -883,12 +883,7 @@ template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
                                           bool* skip_linear_scan) {
   *skip_linear_scan = false;
-
-  // Cutting off last two restart arrays because in default db_bench they
-  // throw the interpolation wildly off.
-  //
-  // TODO: Why does this happen?
-  uint32_t left = 0, right = num_restarts_ - 3;
+  uint32_t left = 0, right = num_restarts_ - 1;
 
   // This value represents how many bytes in each key can be assumed to be
   // uniformly distributed. It may be at most 8.
@@ -923,22 +918,9 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     return true;
   }
 
-  // Use BinarySeek if our target key is greater than our right key as our
-  // interpolation will fail.
-  //
-  // TODO: This happens because we deliberately chop off the last two restart
-  // arrays that have very high numbers of keys. Why do we need to do this?
-  const char* right_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(right);
-  if (!right_key_ptr) {
-    return false;
-  }
-  cmp = CompareCurrentKey(target);
-  if (cmp < 0) {
-    return BinarySeek<DecodeKeyFunc>(target, index, skip_linear_scan);
-  }
-
   // Calculate the slope across our interpolation range.
   // TODO: Use fixed-point arithmetic to skip the floating point conversion.
+  const char* right_key_ptr = SetCurrentKeyToRestartPoint<DecodeKeyFunc>(right);
   double slope = (num_restarts_ - 1) /
                  static_cast<double>(ucmp().Difference(
                      Slice(right_key_ptr, uniformly_distributed_key_bytes),
