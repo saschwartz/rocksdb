@@ -938,6 +938,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   }
 
   // Calculate the slope across our interpolation range.
+  // TODO: Use fixed-point arithmetic to skip the floating point conversion.
   double slope = (num_restarts_ - 1) /
                  static_cast<double>(ucmp().Difference(
                      Slice(right_key_ptr, uniformly_distributed_key_bytes),
@@ -980,6 +981,7 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
     }
 
     // Recalculate expected by interpolating between expected and target.
+    // TODO: Use fixed-point arithmetic to skip the floating point conversion.
     expected = expected +
                (static_cast<double>(ucmp().Difference(
                     Slice(target.data(), uniformly_distributed_key_bytes),
