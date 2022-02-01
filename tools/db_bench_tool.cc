@@ -78,6 +78,7 @@
 #include "util/compression.h"
 #include "util/crc32c.h"
 #include "util/gflags_compat.h"
+#include "util/hash.h"
 #include "util/mutexlock.h"
 #include "util/random.h"
 #include "util/stderr_logger.h"
@@ -317,6 +318,10 @@ DEFINE_int64(max_scan_distance, 0,
 DEFINE_bool(use_uint64_comparator, false, "use Uint64 user comparator");
 
 DEFINE_int64(batch_size, 1, "Batch size");
+
+DEFINE_uint64(randomize_keys, 0,
+              "Random seed for hashing generated keys. 0"
+              "means don't hash generated keys.");
 
 static bool ValidateKeySize(const char* /*flagname*/, int32_t /*value*/) {
   return true;
@@ -3117,6 +3122,13 @@ class Benchmark {
   //     |        key 00000         |
   //     ----------------------------
   void GenerateKeyFromInt(uint64_t v, int64_t num_keys, Slice* key) {
+    // Hash our key if we have been provided a random seed to do it with.
+    if (FLAGS_randomize_keys != 0) {
+      uint64_t hash = Hash64(reinterpret_cast<const char*>(&v),
+                             sizeof(uint64_t), FLAGS_randomize_keys);
+      v = hash;
+    }
+
     if (!keys_.empty()) {
       assert(FLAGS_use_existing_keys);
       assert(keys_.size() == static_cast<size_t>(num_keys));
