@@ -893,8 +893,14 @@ bool BlockIter<TValue>::InterpolationSeek(const Slice& target, uint32_t* index,
   // This value represents how many bytes in each key can be assumed to be
   // uniformly distributed. It may be at most 8.
   //
-  // TODO: This should be obtained from a column option, rather than hardcoded.
-  const size_t uniformly_distributed_key_bytes = 8;
+  // TODO: This should be obtained from a column option, rather than from the
+  // environment.
+  char* b = std::getenv("INTERPOLATION_SEEK_UNIFORM_BYTES");
+  const size_t uniformly_distributed_key_bytes =
+      b ? std::stoi(std::string(b)) : 8;
+  if (uniformly_distributed_key_bytes<1 | uniformly_distributed_key_bytes> 8) {
+    return false;
+  }
 
   // This value places a limitation on when we should stop doing new
   // interpolations, and instead just linear search. This prevents expensive
